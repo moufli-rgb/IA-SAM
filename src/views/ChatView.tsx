@@ -21,6 +21,7 @@ import { useUi } from '../context/UiContext';
 import { callAi, daysUntil, download, today } from '../lib/api';
 import { useDictation } from '../lib/useDictation';
 import { IconButton, Markdown, SamMark, cx } from '../components/ui';
+import { InstallBanner } from '../components/Install';
 import type { Nav } from '../App';
 
 type Concision = 'concise' | 'balanced' | 'detailed';
@@ -164,7 +165,7 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
             <div className="mb-7 flex flex-col items-center text-center">
               <SamMark size={44} />
               <h1 className="mt-4 text-[1.4rem] leading-snug font-semibold tracking-[-0.02em] md:text-[2rem]">
-                {greeting()} {name}, on avance sur quoi ?
+                {greeting()} {name}, on avance sur quoi ?
               </h1>
             </div>
             {composer}
@@ -180,6 +181,7 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
                 </button>
               ))}
             </div>
+            <InstallBanner className="mt-5" />
             {(data.archivedChats || []).length > 0 && (
               <div className="mt-6">
                 <p className="mb-1.5 px-1 text-[0.82rem] font-medium text-ink-3">Reprendre une discussion</p>

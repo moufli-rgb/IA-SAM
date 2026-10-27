@@ -18,7 +18,9 @@ import {
   Sun,
   Lock,
   Trash2,
+  Smartphone,
 } from 'lucide-react';
+import { useInstall } from '../lib/install';
 import { useSam } from '../context/SamContext';
 import { useUi } from '../context/UiContext';
 import { daysUntil } from '../lib/api';
@@ -228,6 +230,7 @@ const Sidebar: React.FC<{
   toggleTheme: () => void;
 }> = ({ tab, go, onNewChat, onNewSession, onCollapse, isDark, toggleTheme }) => {
   const { data, openChat, deleteChat, lockApp, sync } = useSam();
+  const { installed, install } = useInstall();
   const days = daysUntil(data.profile.defenseDate);
   const recents = data.archivedChats || [];
   const firstUser = data.chatHistory.find((m) => m.sender !== 'SAM');
@@ -249,6 +252,7 @@ const Sidebar: React.FC<{
       <div className="mt-3 space-y-0.5">
         <Row icon={SquarePen} label="Nouvelle discussion" onClick={onNewChat} />
         <Row icon={NotebookPen} label="Raconter ma séance" onClick={onNewSession} />
+        {!installed && <Row icon={Smartphone} label="Installer l’app" onClick={() => install()} />}
       </div>
 
       <nav className="scrollbar-none mt-4 flex-1 overflow-y-auto">

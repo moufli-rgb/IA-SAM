@@ -4,6 +4,7 @@ import { UiProvider } from './context/UiContext';
 import { Shell, useHashTab, type ActiveTab } from './components/Shell';
 import { AuthScreen, LockScreen, Splash } from './components/Gates';
 import { SessionSheet } from './components/SessionSheet';
+import { InstallHelp } from './components/Install';
 import { DashboardView } from './views/DashboardView';
 import { ChatView } from './views/ChatView';
 import { StagesView } from './views/StagesView';
@@ -49,6 +50,7 @@ function Workspace() {
         {tab === 'tasks' && <TasksView />}
         {tab === 'memory_settings' && <SettingsView />}
       </Shell>
+      <InstallHelp />
       <SessionSheet open={sessionOpen} onClose={() => setSessionOpen(false)} onDone={(id) => nav('journal_scripts', { sessionId: id })} />
     </>
   );
