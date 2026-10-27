@@ -1,6 +1,0 @@
-{
-  "name": "SAM - Assistant de Donald (Mémoire & TPFE Architecture)",
-  "description": "Assistant personnel de recherche, de rédaction académique, de pilotage de mémoire/TPFE et de journal de progression pour Donald.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

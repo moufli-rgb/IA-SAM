@@ -17,8 +17,8 @@ export interface MemoirStage {
 }
 
 export interface DonaldProfile {
-  name: 'Donald';
-  degree: 'Master en Architecture';
+  name: string;
+  degree: string;
   topic: string;
   subTopic: string;
   contextLocation: string; // e.g. Cotonou, Dakar, Abidjan, etc.
@@ -33,7 +33,7 @@ export interface DonaldProfile {
 
 export interface ChatMessage {
   id: string;
-  sender: 'SAM' | 'Donald';
+  sender: 'SAM' | 'Donald'; // 'Donald' = l'étudiant (nom conservé pour compatibilité des sauvegardes)
   content: string;
   timestamp: string;
   stageReferenceId?: number;
@@ -69,6 +69,7 @@ export interface BenchmarkThesis {
   strengths: string[];
   weaknesses: string[];
   lessonsForDonald: string[];
+  report?: string;
   addedAt: string;
 }
 
@@ -155,10 +156,18 @@ export interface ValidatedDecision {
   impactOnProject: string;
 }
 
+export interface ArchivedChat {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+}
+
 export interface SamProjectData {
   profile: DonaldProfile;
   stages: MemoirStage[];
   chatHistory: ChatMessage[];
+  archivedChats?: ArchivedChat[];
   sources: ReferenceSource[];
   benchmarks: BenchmarkThesis[];
   sections: MemoirSection[];

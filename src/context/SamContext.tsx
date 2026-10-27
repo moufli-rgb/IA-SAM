@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import {
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import type {
   SamProjectData,
   DonaldProfile,
   MemoirStage,
@@ -12,22 +13,33 @@ import {
   ValidatedDecision,
 } from '../types/sam';
 import { defaultProjectData } from '../data/initialData';
+import { supabase, isCloud } from '../lib/supabase';
+import { setStudentName, uid, download, today } from '../lib/api';
+
+export type SyncState = 'idle' | 'saving' | 'saved' | 'error' | 'local';
 
 interface SamContextType {
   data: SamProjectData;
   isLoading: boolean;
   isLocked: boolean;
+  session: Session | null;
+  needsAuth: boolean;
+  sync: SyncState;
+  signOut: () => Promise<void>;
   unlockWithPin: (pin: string) => boolean;
   lockApp: () => void;
   updateProfile: (profile: Partial<DonaldProfile>) => void;
   updateStage: (stageId: number, updates: Partial<MemoirStage>) => void;
   addChatMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   clearChatHistory: () => void;
+  newChat: () => void;
+  openChat: (id: string) => void;
+  deleteChat: (id: string) => void;
   addSource: (source: Omit<ReferenceSource, 'id' | 'createdAt'>) => void;
   removeSource: (id: string) => void;
-  addBenchmark: (benchmark: Omit<BenchmarkThesis, 'id' | 'addedAt'>) => void;
+  addBenchmark: (benchmark: Omit<BenchmarkThesis, 'id' | 'addedAt'>) => string;
   updateSection: (sectionId: string, updates: Partial<MemoirSection>) => void;
-  addSessionLog: (log: Omit<WorkSessionLog, 'id'>) => void;
+  addSessionLog: (log: Omit<WorkSessionLog, 'id'>) => string;
   addTask: (task: Omit<ProjectTask, 'id' | 'createdAt'>) => void;
   updateTask: (taskId: string, updates: Partial<ProjectTask>) => void;
   deleteTask: (taskId: string) => void;
@@ -36,440 +48,219 @@ interface SamContextType {
   exportProjectJson: () => void;
   importProjectJson: (jsonString: string) => boolean;
   resetToDefault: () => void;
-  saveDataToServer: () => Promise<void>;
-  notifyUser: (title: string, body: string) => void;
+}
+
+function archiveOf(messages: ChatMessage[]) {
+  const first = messages.find((m) => m.sender !== 'SAM')?.content || 'Discussion';
+  return {
+    id: uid('chat'),
+    title: first.replace(/\s+/g, ' ').slice(0, 60),
+    updatedAt: messages[messages.length - 1]?.timestamp || new Date().toISOString(),
+    messages,
+  };
 }
 
 const SamContext = createContext<SamContextType | undefined>(undefined);
+const cacheKey = (userId?: string) => `sam_project_v2_${userId || 'local'}`;
+const LEGACY_KEY = 'sam_donald_data_v1';
 
-const LOCAL_STORAGE_KEY = 'sam_donald_data_v1';
+function readCache(userId?: string): SamProjectData | null {
+  try {
+    const raw = localStorage.getItem(cacheKey(userId)) || (!userId ? localStorage.getItem(LEGACY_KEY) : null);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function writeCache(d: SamProjectData, userId?: string) {
+  try {
+    localStorage.setItem(cacheKey(userId), JSON.stringify(d));
+  } catch {
+    /* stockage plein ou bloqué : la base Supabase reste la référence */
+  }
+}
 
 export const SamProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [data, setData] = useState<SamProjectData>(defaultProjectData);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isLocked, setIsLocked] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLocked, setIsLocked] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(!isCloud);
+  const [sync, setSync] = useState<SyncState>(isCloud ? 'idle' : 'local');
+  const hydrated = useRef(false);
+  const saveTimer = useRef<number | null>(null);
+  const userId = session?.user.id;
 
-  // Load initial data from server or localStorage
+  // ---- Auth
   useEffect(() => {
-    async function loadData() {
-      try {
-        const res = await fetch('/api/project');
-        const json = await res.json();
-        if (json.success && json.data) {
-          setData(json.data);
-          if (json.data.profile.isPinLocked && json.data.profile.pinCode) {
-            setIsLocked(true);
-          }
-          setIsLoading(false);
-          return;
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // ---- Chargement du projet
+  useEffect(() => {
+    if (!authReady) return;
+    hydrated.current = false;
+    let cancelled = false;
+
+    async function load() {
+      setIsLoading(true);
+      let project: SamProjectData | null = null;
+
+      if (supabase && userId) {
+        const { data: row, error } = await supabase.from('projects').select('data').eq('user_id', userId).maybeSingle();
+        if (!error && row?.data) {
+          project = row.data as SamProjectData;
+        } else if (!error) {
+          // Premier passage : on reprend ce qui existait sur cet appareil, sinon le projet d'exemple.
+          project = readCache(userId) || readCache() || defaultProjectData;
+          await supabase.from('projects').upsert({ user_id: userId, data: project });
+        } else {
+          console.warn('Supabase load error', error);
+          project = readCache(userId);
+          setSync('error');
         }
-      } catch (err) {
-        console.warn('Backend unavailable, checking local storage', err);
+      } else if (!supabase) {
+        project = readCache();
       }
 
-      // Fallback to localStorage
-      try {
-        const local = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (local) {
-          const parsed = JSON.parse(local);
-          setData(parsed);
-          if (parsed.profile?.isPinLocked && parsed.profile?.pinCode) {
-            setIsLocked(true);
-          }
-        }
-      } catch (e) {
-        console.error('Error loading local storage', e);
+      if (cancelled) return;
+      if (project) {
+        setData(project);
+        if (project.profile?.isPinLocked && project.profile?.pinCode) setIsLocked(true);
       }
+      hydrated.current = true;
       setIsLoading(false);
     }
 
-    loadData();
+    if (isCloud && !userId) {
+      setIsLoading(false);
+      return;
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, userId]);
+
+  useEffect(() => setStudentName(data.profile.name), [data.profile.name]);
+
+  // ---- Sauvegarde : cache local immédiat + Supabase avec un léger délai
+  useEffect(() => {
+    if (!hydrated.current) return;
+    writeCache(data, userId);
+    if (!supabase || !userId) return;
+    setSync('saving');
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(async () => {
+      const { error } = await supabase!.from('projects').upsert({ user_id: userId, data });
+      setSync(error ? 'error' : 'saved');
+      if (error) console.warn('Supabase save error', error);
+    }, 900);
+  }, [data, userId]);
+
+  const mutate = useCallback((fn: (prev: SamProjectData) => SamProjectData) => {
+    setData((prev) => ({ ...fn(prev), lastSaved: new Date().toISOString() }));
   }, []);
 
-  // Sync to local storage on any state change
-  useEffect(() => {
-    if (!isLoading) {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
-      } catch (e) {
-        console.error('Local storage save error', e);
-      }
-    }
-  }, [data, isLoading]);
+  const now = () => new Date().toISOString();
 
-  const saveDataToServer = async () => {
-    try {
-      await fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-    } catch (e) {
-      console.warn('Could not sync to server backend', e);
-    }
-  };
-
-  const notifyUser = (title: string, body: string) => {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification(title, { body, icon: '/favicon.ico' });
-      } catch (e) {
-        console.log('Notification error', e);
-      }
-    }
-  };
-
-  const unlockWithPin = (pin: string): boolean => {
-    if (data.profile.pinCode === pin) {
-      setIsLocked(false);
-      return true;
-    }
-    return false;
-  };
-
-  const lockApp = () => {
-    if (data.profile.pinCode) {
-      setIsLocked(true);
-    }
-  };
-
-  const updateProfile = (profileUpdates: Partial<DonaldProfile>) => {
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        profile: { ...prev.profile, ...profileUpdates },
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const updateStage = (stageId: number, updates: Partial<MemoirStage>) => {
-    setData((prev) => {
-      const updatedStages = prev.stages.map((st) =>
-        st.id === stageId ? { ...st, ...updates, updatedAt: new Date().toISOString() } : st
-      );
-      const updated = { ...prev, stages: updatedStages, lastSaved: new Date().toISOString() };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addChatMessage = (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => {
-    const newMsg: ChatMessage = {
-      ...msg,
-      id: 'msg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-      timestamp: new Date().toISOString(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        chatHistory: [...prev.chatHistory, newMsg],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const clearChatHistory = () => {
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        chatHistory: [
-          {
-            id: 'msg-' + Date.now(),
-            sender: 'SAM' as const,
-            content: "Historique réinitialisé, Donald. Notre binôme est prêt pour une nouvelle séance !",
-            timestamp: new Date().toISOString(),
-          },
-        ],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addSource = (source: Omit<ReferenceSource, 'id' | 'createdAt'>) => {
-    const newSrc: ReferenceSource = {
-      ...source,
-      id: 'src-' + Date.now(),
-      createdAt: new Date().toISOString(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        sources: [newSrc, ...prev.sources],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const removeSource = (id: string) => {
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        sources: prev.sources.filter((s) => s.id !== id),
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addBenchmark = (bm: Omit<BenchmarkThesis, 'id' | 'addedAt'>) => {
-    const newBm: BenchmarkThesis = {
-      ...bm,
-      id: 'bm-' + Date.now(),
-      addedAt: new Date().toISOString(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        benchmarks: [newBm, ...prev.benchmarks],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const updateSection = (sectionId: string, updates: Partial<MemoirSection>) => {
-    setData((prev) => {
-      const updatedSections = prev.sections.map((sec) =>
-        sec.id === sectionId ? { ...sec, ...updates, updatedAt: new Date().toISOString() } : sec
-      );
-      const updated = {
-        ...prev,
-        sections: updatedSections,
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addSessionLog = (log: Omit<WorkSessionLog, 'id'>) => {
-    const newLog: WorkSessionLog = {
-      ...log,
-      id: 'sess-' + Date.now(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        sessions: [newLog, ...prev.sessions],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addTask = (task: Omit<ProjectTask, 'id' | 'createdAt'>) => {
-    const newTask: ProjectTask = {
-      ...task,
-      id: 'task-' + Date.now(),
-      createdAt: new Date().toISOString(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        tasks: [newTask, ...prev.tasks],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const updateTask = (taskId: string, updates: Partial<ProjectTask>) => {
-    setData((prev) => {
-      const updatedTasks = prev.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t));
-      const updated = {
-        ...prev,
-        tasks: updatedTasks,
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const deleteTask = (taskId: string) => {
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        tasks: prev.tasks.filter((t) => t.id !== taskId),
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const addValidatedDecision = (decision: Omit<ValidatedDecision, 'id'>) => {
-    const newDec: ValidatedDecision = {
-      ...decision,
-      id: 'dec-' + Date.now(),
-    };
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        decisions: [newDec, ...prev.decisions],
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const removeDecision = (id: string) => {
-    setData((prev) => {
-      const updated = {
-        ...prev,
-        decisions: prev.decisions.filter((d) => d.id !== id),
-        lastSaved: new Date().toISOString(),
-      };
-      fetch('/api/project', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      }).catch(() => {});
-      return updated;
-    });
-  };
-
-  const exportProjectJson = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `SAM_Sauvegarde_Donald_${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const importProjectJson = (jsonString: string): boolean => {
-    try {
-      const parsed = JSON.parse(jsonString);
-      if (parsed.profile && parsed.stages) {
-        setData(parsed);
-        fetch('/api/project', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(parsed),
-        }).catch(() => {});
+  const value: SamContextType = {
+    data,
+    isLoading: isLoading || !authReady,
+    isLocked,
+    session,
+    needsAuth: isCloud && authReady && !session,
+    sync,
+    signOut: async () => {
+      hydrated.current = false;
+      await supabase?.auth.signOut();
+      setData(defaultProjectData);
+    },
+    unlockWithPin: (pin) => {
+      if (data.profile.pinCode === pin) {
+        setIsLocked(false);
         return true;
       }
-    } catch (e) {
-      console.error('Import error', e);
-    }
-    return false;
+      return false;
+    },
+    lockApp: () => data.profile.pinCode && setIsLocked(true),
+    updateProfile: (p) => mutate((d) => ({ ...d, profile: { ...d.profile, ...p } })),
+    updateStage: (id, u) =>
+      mutate((d) => ({ ...d, stages: d.stages.map((s) => (s.id === id ? { ...s, ...u, updatedAt: now() } : s)) })),
+    addChatMessage: (m) =>
+      mutate((d) => ({ ...d, chatHistory: [...d.chatHistory, { ...m, id: uid('msg'), timestamp: now() }] })),
+    clearChatHistory: () =>
+      mutate((d) => ({
+        ...d,
+        chatHistory: [],
+      })),
+    newChat: () =>
+      mutate((d) => {
+        const hasUser = d.chatHistory.some((m) => m.sender !== 'SAM');
+        const archived = d.archivedChats || [];
+        return {
+          ...d,
+          archivedChats: hasUser ? [archiveOf(d.chatHistory), ...archived].slice(0, 50) : archived,
+          chatHistory: [],
+        };
+      }),
+    openChat: (id) =>
+      mutate((d) => {
+        const archived = d.archivedChats || [];
+        const target = archived.find((c) => c.id === id);
+        if (!target) return d;
+        const rest = archived.filter((c) => c.id !== id);
+        const hasUser = d.chatHistory.some((m) => m.sender !== 'SAM');
+        return { ...d, chatHistory: target.messages, archivedChats: hasUser ? [archiveOf(d.chatHistory), ...rest] : rest };
+      }),
+    deleteChat: (id) => mutate((d) => ({ ...d, archivedChats: (d.archivedChats || []).filter((c) => c.id !== id) })),
+    addSource: (s) => mutate((d) => ({ ...d, sources: [{ ...s, id: uid('src'), createdAt: now() }, ...d.sources] })),
+    removeSource: (id) => mutate((d) => ({ ...d, sources: d.sources.filter((s) => s.id !== id) })),
+    addBenchmark: (b) => {
+      const id = uid('bm');
+      mutate((d) => ({ ...d, benchmarks: [{ ...b, id, addedAt: now() }, ...d.benchmarks] }));
+      return id;
+    },
+    updateSection: (id, u) =>
+      mutate((d) => ({ ...d, sections: d.sections.map((s) => (s.id === id ? { ...s, ...u, updatedAt: now() } : s)) })),
+    addSessionLog: (l) => {
+      const id = uid('sess');
+      mutate((d) => ({ ...d, sessions: [{ ...l, id }, ...d.sessions] }));
+      return id;
+    },
+    addTask: (t) => mutate((d) => ({ ...d, tasks: [{ ...t, id: uid('task'), createdAt: now() }, ...d.tasks] })),
+    updateTask: (id, u) => mutate((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === id ? { ...t, ...u } : t)) })),
+    deleteTask: (id) => mutate((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== id) })),
+    addValidatedDecision: (dec) => mutate((d) => ({ ...d, decisions: [{ ...dec, id: uid('dec') }, ...d.decisions] })),
+    removeDecision: (id) => mutate((d) => ({ ...d, decisions: d.decisions.filter((x) => x.id !== id) })),
+    exportProjectJson: () =>
+      download(`SAM_sauvegarde_${data.profile.name}_${today()}.json`, JSON.stringify(data, null, 2), 'application/json'),
+    importProjectJson: (json) => {
+      try {
+        const parsed = JSON.parse(json);
+        if (parsed.profile && parsed.stages) {
+          mutate(() => parsed);
+          return true;
+        }
+      } catch {
+        /* fichier invalide */
+      }
+      return false;
+    },
+    resetToDefault: () => mutate(() => defaultProjectData),
   };
 
-  const resetToDefault = () => {
-    setData(defaultProjectData);
-    fetch('/api/project', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(defaultProjectData),
-    }).catch(() => {});
-  };
-
-  return (
-    <SamContext.Provider
-      value={{
-        data,
-        isLoading,
-        isLocked,
-        unlockWithPin,
-        lockApp,
-        updateProfile,
-        updateStage,
-        addChatMessage,
-        clearChatHistory,
-        addSource,
-        removeSource,
-        addBenchmark,
-        updateSection,
-        addSessionLog,
-        addTask,
-        updateTask,
-        deleteTask,
-        addValidatedDecision,
-        removeDecision,
-        exportProjectJson,
-        importProjectJson,
-        resetToDefault,
-        saveDataToServer,
-        notifyUser,
-      }}
-    >
-      {children}
-    </SamContext.Provider>
-  );
+  return <SamContext.Provider value={value}>{children}</SamContext.Provider>;
 };
 
 export const useSam = () => {
-  const context = useContext(SamContext);
-  if (!context) {
-    throw new Error('useSam must be used within a SamProvider');
-  }
-  return context;
+  const ctx = useContext(SamContext);
+  if (!ctx) throw new Error('useSam must be used within a SamProvider');
+  return ctx;
 };
