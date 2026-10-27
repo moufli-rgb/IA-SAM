@@ -19,7 +19,7 @@ export const Splash: React.FC = () => (
 
 /* ---------------------------------------------------------------- Connexion Supabase */
 export const AuthScreen: React.FC = () => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'magic'>('signin');
+  const [mode] = useState<'signin' | 'signup' | 'magic'>('signin'); // comptes créés à l'avance : connexion uniquement
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -99,7 +99,7 @@ export const AuthScreen: React.FC = () => {
           <p className="mt-1.5 text-ink-2">
             {mode === 'signup'
               ? 'Réservé aux deux adresses autorisées. Tes données restent dans ton espace privé.'
-              : 'Espace privé, réservé à deux personnes. Retrouve ton projet sur ton téléphone comme sur ton ordinateur.'}
+              : 'Espace privé, réservé à deux personnes. Connecte-toi avec l’adresse et le mot de passe qu’on t’a donnés.'}
           </p>
 
           <div className="mt-7 space-y-4">
@@ -130,26 +130,9 @@ export const AuthScreen: React.FC = () => {
             {mode === 'signup' ? 'Créer mon compte' : mode === 'magic' ? 'Recevoir un lien de connexion' : 'Se connecter'}
           </Button>
 
-          <div className="mt-5 flex flex-col items-center gap-2 text-sm">
-            {mode !== 'signup' ? (
-              <button type="button" className="font-semibold text-adire" onClick={() => setMode('signup')}>
-                Pas encore de compte ? Créer un compte
-              </button>
-            ) : (
-              <button type="button" className="font-semibold text-adire" onClick={() => setMode('signin')}>
-                J’ai déjà un compte
-              </button>
-            )}
-            {mode !== 'magic' ? (
-              <button type="button" className="text-ink-2 hover:text-ink" onClick={() => setMode('magic')}>
-                Se connecter sans mot de passe
-              </button>
-            ) : (
-              <button type="button" className="text-ink-2 hover:text-ink" onClick={() => setMode('signin')}>
-                Utiliser un mot de passe
-              </button>
-            )}
-          </div>
+          <p className="mt-5 text-center text-sm text-ink-3">
+            Les deux comptes sont créés à l’avance. Mot de passe oublié ? Demande à l’administrateur de SAM.
+          </p>
         </form>
       </div>
     </div>
@@ -223,3 +206,23 @@ export const AccessScreen: React.FC<{ reason: 'denied' | 'unconfigured' }> = ({ 
     </div>
   );
 };
+
+/* ---------------------------------------------------------------- Supabase absent en ligne */
+export const ConfigMissingScreen: React.FC = () => (
+  <div className="grid min-h-dvh place-items-center bg-paper px-6">
+    <div className="w-full max-w-md">
+      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-sheet-2">
+        <Lock className="h-6 w-6 text-ink-2" />
+      </div>
+      <h2 className="text-xl font-semibold">La connexion n’est pas encore configurée</h2>
+      <p className="mt-2 text-ink-2">
+        Ce site ne connaît pas Supabase, donc il ne peut ni afficher l’inscription ni protéger l’accès. Dans Vercel :
+      </p>
+      <ol className="mt-4 list-decimal space-y-2 pl-5 text-[0.95rem] text-ink">
+        <li><strong>Settings → Environment Variables</strong> : ajoute <code className="rounded bg-sheet-2 px-1">VITE_SUPABASE_URL</code> et <code className="rounded bg-sheet-2 px-1">VITE_SUPABASE_ANON_KEY</code>, environnement <strong>Production</strong> coché.</li>
+        <li><strong>Deployments</strong> → dernier déploiement → <strong>⋯ → Redeploy</strong>. Indispensable : ces variables sont lues pendant la construction du site.</li>
+        <li>Recharge cette page.</li>
+      </ol>
+    </div>
+  </div>
+);

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { SamProvider, useSam } from './context/SamContext';
 import { UiProvider } from './context/UiContext';
 import { Shell, useHashTab, type ActiveTab } from './components/Shell';
-import { AccessScreen, AuthScreen, LockScreen, Splash } from './components/Gates';
+import { AccessScreen, AuthScreen, ConfigMissingScreen, LockScreen, Splash } from './components/Gates';
+import { isCloud } from './lib/supabase';
 import { SessionSheet } from './components/SessionSheet';
 import { InstallHelp } from './components/Install';
 import { DashboardView } from './views/DashboardView';
@@ -26,6 +27,8 @@ function Workspace() {
   const [intent, setIntent] = useState<Intent>({});
   const [sessionOpen, setSessionOpen] = useState(false);
 
+  // En ligne, SAM ne s'ouvre jamais sans protection : il faut Supabase.
+  if (import.meta.env.PROD && !isCloud) return <ConfigMissingScreen />;
   if (isLoading) return <Splash />;
   if (needsAuth) return <AuthScreen />;
   if (access !== 'ok') return <AccessScreen reason={access} />;
