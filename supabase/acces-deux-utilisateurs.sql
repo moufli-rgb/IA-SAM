@@ -14,7 +14,7 @@ delete from public.allowed_emails;
 insert into public.allowed_emails (email) values
   ('Donald.donaldmzr@gmail.com'),
   ('Moufli.sadikoumouflihath@gmail.com');
-0.
+
 -- Plus jamais plus de deux adresses
 create or replace function public.limit_allowed_emails()
 returns trigger language plpgsql as $$
