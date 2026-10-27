@@ -226,7 +226,7 @@ export const SamMark: React.FC<{ size?: number; thinking?: boolean; className?: 
         />
       )}
       <img
-        src="/logo.jpg"
+        src="/sam-logo.jpg"
         alt=""
         width={size}
         height={size}

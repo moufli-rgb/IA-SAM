@@ -86,7 +86,7 @@ export const InstallBanner: React.FC<{ className?: string }> = ({ className }) =
       transition={{ delay: 0.4 }}
       className={cx('flex items-center gap-3 rounded-xl border border-line px-3 py-2.5 md:hidden', className)}
     >
-      <img src="/icons/icon-192.png" alt="" className="h-9 w-9 shrink-0 rounded-lg" />
+      <img src="/icons/sam-192.png" alt="" className="h-9 w-9 shrink-0 rounded-lg" />
       <p className="min-w-0 flex-1 text-[0.86rem] leading-snug text-ink-2">Ajoute SAM à ton écran d’accueil pour l’ouvrir en un geste.</p>
       <Button size="sm" variant="primary" onClick={() => install()}>Installer</Button>
       <button onClick={dismiss} aria-label="Masquer" className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-3 hover:bg-sheet-2">
