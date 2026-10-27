@@ -208,7 +208,7 @@ export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (
   />
 );
 
-/* ---------------------------------------------------------------- Le sceau de SAM : un petit soleil */
+/* ---------------------------------------------------------------- Le logo de SAM (photo) */
 export const SamMark: React.FC<{ size?: number; thinking?: boolean; className?: string }> = ({
   size = 32,
   thinking,
@@ -216,30 +216,23 @@ export const SamMark: React.FC<{ size?: number; thinking?: boolean; className?: 
 }) => {
   const reduce = useReducedMotion();
   return (
-    <span
-      className={cx('relative inline-flex shrink-0 items-center justify-center rounded-full bg-sheet-2', className)}
-      style={{ width: size, height: size }}
-      aria-hidden
-    >
-      <svg viewBox="0 0 40 40" width={size * 0.78} height={size * 0.78}>
-        <motion.g
-          animate={thinking && !reduce ? { rotate: 360 } : { rotate: 0 }}
-          transition={thinking ? { repeat: Infinity, duration: 5, ease: 'linear' } : { duration: 0.4 }}
-          style={{ originX: '20px', originY: '20px' }}
-        >
-          {Array.from({ length: 8 }).map((_, i) => (
-            <motion.line
-              key={i}
-              x1="20" y1="6" x2="20" y2="9.5"
-              stroke="var(--color-soleil)" strokeWidth="2.4" strokeLinecap="round"
-              transform={`rotate(${i * 45} 20 20)`}
-              animate={thinking && !reduce ? { opacity: [0.25, 1, 0.25] } : { opacity: 1 }}
-              transition={thinking ? { repeat: Infinity, duration: 1.2, delay: i * 0.1 } : undefined}
-            />
-          ))}
-        </motion.g>
-        <circle cx="20" cy="20" r="7" fill="var(--color-soleil)" />
-      </svg>
+    <span className={cx('relative inline-flex shrink-0 items-center justify-center', className)} style={{ width: size, height: size }} aria-hidden>
+      {thinking && (
+        <motion.span
+          className="absolute -inset-[3px] rounded-full"
+          style={{ background: 'conic-gradient(from 0deg, var(--color-adire), transparent 55%, var(--color-adire))' }}
+          animate={reduce ? undefined : { rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1.4, ease: 'linear' }}
+        />
+      )}
+      <img
+        src="/logo.jpg"
+        alt=""
+        width={size}
+        height={size}
+        draggable={false}
+        className="relative h-full w-full rounded-full bg-sheet-2 object-cover ring-2 ring-paper"
+      />
     </span>
   );
 };

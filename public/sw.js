@@ -2,7 +2,7 @@
    - Pages : réseau d'abord (toujours la dernière version), cache si hors ligne.
    - Fichiers /assets/ (noms uniques à chaque build) : cache d'abord.
    - Jamais de cache pour /api ni pour Supabase. */
-const CACHE = 'sam-v1';
+const CACHE = 'sam-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {
