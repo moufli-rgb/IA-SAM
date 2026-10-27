@@ -66,29 +66,43 @@ const MODELS = [MODEL, ...FALLBACKS.filter((m) => m !== MODEL)];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function isBusy(e: any) {
+  if (e instanceof HttpError) return false;
   const msg = String(e?.message || '');
   const code = Number(e?.status || e?.code || 0);
   return code === 503 || code === 429 || code === 500 || /UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|503|429/i.test(msg);
 }
+const isTimeout = (e: any) => e?.name === 'AbortError' || e?.name === 'TimeoutError' || /aborted|timeout/i.test(String(e?.message || ''));
+
+// Vercel coupe la fonction à 60 s : on garde une marge pour répondre proprement.
+const BUDGET_MS = 52_000;
 
 async function generate(contents: any, cfg: Record<string, unknown>) {
+  const started = Date.now();
   let lastErr: any;
-  for (const model of MODELS) {
-    // Deux essais par modèle, avec une courte pause entre les deux.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        return await getAi().models.generateContent({ model, contents, config: cfg });
-      } catch (e: any) {
-        lastErr = e;
-        if (!isBusy(e)) throw e;
-        await sleep(attempt === 0 ? 1200 : 2500);
-      }
+  for (let i = 0; i < MODELS.length; i++) {
+    const remaining = BUDGET_MS - (Date.now() - started);
+    if (remaining < 6_000) break;
+    // Le premier modèle a plus de temps ; les modèles de secours sont plus rapides.
+    const slot = i === MODELS.length - 1 ? remaining : Math.min(remaining, i === 0 ? 30_000 : 20_000);
+    try {
+      return await getAi().models.generateContent({
+        model: MODELS[i],
+        contents,
+        config: { ...cfg, abortSignal: AbortSignal.timeout(slot) },
+      });
+    } catch (e: any) {
+      lastErr = e;
+      if (!isBusy(e) && !isTimeout(e)) throw e;
+      console.warn(`[SAM api] ${MODELS[i]} indisponible (${isTimeout(e) ? 'délai dépassé' : 'surchargé'}), modèle suivant`);
+      await sleep(400);
     }
   }
-  if (isBusy(lastErr)) {
-    throw new HttpError(503, 'Les serveurs de Google sont très sollicités en ce moment. Réessaie dans une minute.');
-  }
-  throw lastErr;
+  throw new HttpError(
+    503,
+    isTimeout(lastErr)
+      ? 'Gemini met trop de temps à répondre en ce moment. Réessaie dans une minute, ou demande une réponse plus courte.'
+      : 'Les serveurs de Google sont très sollicités en ce moment. Réessaie dans une minute.',
+  );
 }
 
 // ---------------------------------------------------------------- actions

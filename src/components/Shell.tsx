@@ -20,6 +20,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useSam } from '../context/SamContext';
+import { useUi } from '../context/UiContext';
 import { daysUntil } from '../lib/api';
 import { cx, IconButton, SamMark } from './ui';
 
@@ -111,12 +112,14 @@ export const Shell: React.FC<{
   const [collapsed, setCollapsed] = useStored<'1'>('sam_sidebar_closed', null);
   const [drawer, setDrawer] = useState(false);
   const { isDark, toggle } = useTheme();
-  const { newChat } = useSam();
+  const { newChat, data } = useSam();
+  const { toast } = useUi();
   const isChat = tab === 'chat';
 
   useEffect(() => setDrawer(false), [tab]);
 
   const startChat = () => {
+    if (data.chatHistory.some((m) => m.sender !== 'SAM')) toast('Discussion précédente rangée dans « Discussions récentes ».', 'info');
     newChat();
     go('chat');
     setDrawer(false);
@@ -227,6 +230,8 @@ const Sidebar: React.FC<{
   const { data, openChat, deleteChat, lockApp, sync } = useSam();
   const days = daysUntil(data.profile.defenseDate);
   const recents = data.archivedChats || [];
+  const firstUser = data.chatHistory.find((m) => m.sender !== 'SAM');
+  const currentTitle = firstUser ? firstUser.content.replace(/\s+/g, ' ').slice(0, 60) : '';
   const name = data.profile.name || 'Toi';
 
   return (
@@ -257,11 +262,25 @@ const Sidebar: React.FC<{
           </ul>
         ))}
 
-        {recents.length > 0 && (
-          <div className="mt-5">
-            <p className="px-2.5 pb-1 text-[0.78rem] font-medium text-ink-3">Discussions récentes</p>
+        <div className="mt-5">
+          <p className="px-2.5 pb-1 text-[0.78rem] font-medium text-ink-3">Discussions récentes</p>
+          {currentTitle || recents.length > 0 ? (
             <ul className="space-y-px">
-              {recents.slice(0, 12).map((c) => (
+              {currentTitle && (
+                <li>
+                  <button
+                    onClick={() => go('chat')}
+                    className={cx(
+                      'block w-full truncate rounded-lg py-1.5 pr-3 pl-2.5 text-left text-[0.88rem]',
+                      tab === 'chat' ? 'bg-rail-2 font-medium text-ink' : 'text-ink-2 hover:bg-rail-2 hover:text-ink',
+                    )}
+                    title={currentTitle}
+                  >
+                    {currentTitle}
+                  </button>
+                </li>
+              )}
+              {recents.slice(0, 20).map((c) => (
                 <li key={c.id} className="group relative">
                   <button
                     onClick={() => {
@@ -276,15 +295,17 @@ const Sidebar: React.FC<{
                   <button
                     onClick={() => deleteChat(c.id)}
                     aria-label="Supprimer la discussion"
-                    className="absolute top-1/2 right-1 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-3 hover:text-laterite group-hover:flex"
+                    className="absolute top-1/2 right-1 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-3 hover:text-laterite lg:hidden lg:group-hover:flex"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </li>
               ))}
             </ul>
-          </div>
-        )}
+          ) : (
+            <p className="px-2.5 text-[0.84rem] text-ink-3">Tes discussions apparaîtront ici.</p>
+          )}
+        </div>
       </nav>
 
       <div className="mt-2 flex items-center gap-1 border-t border-line pt-2">

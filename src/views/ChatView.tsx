@@ -37,7 +37,7 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
   onConsumed,
   nav,
 }) => {
-  const { data, addChatMessage, clearChatHistory, addValidatedDecision } = useSam();
+  const { data, addChatMessage, clearChatHistory, addValidatedDecision, openChat } = useSam();
   const { ask, confirm, toast } = useUi();
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -180,6 +180,26 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
                 </button>
               ))}
             </div>
+            {(data.archivedChats || []).length > 0 && (
+              <div className="mt-6">
+                <p className="mb-1.5 px-1 text-[0.82rem] font-medium text-ink-3">Reprendre une discussion</p>
+                <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+                  {(data.archivedChats || []).slice(0, 3).map((c) => (
+                    <li key={c.id}>
+                      <button
+                        onClick={() => openChat(c.id)}
+                        className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left text-[0.9rem] hover:bg-sheet-2"
+                      >
+                        <span className="truncate text-ink">{c.title}</span>
+                        <span className="shrink-0 text-[0.78rem] text-ink-3">
+                          {new Date(c.updatedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <button
               onClick={() => nav('dashboard')}
               className="mx-auto mt-8 flex flex-col items-center gap-2 text-[0.82rem] text-ink-3 hover:text-ink-2"
