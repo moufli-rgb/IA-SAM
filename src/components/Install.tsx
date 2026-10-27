@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Share, SquarePlus, MoreVertical, Smartphone, X } from 'lucide-react';
+import { Share, SquarePlus, MoreVertical, Smartphone, X, MonitorDown, Monitor } from 'lucide-react';
 import { isIOS, useInstall } from '../lib/install';
 import { Button, Sheet, cx } from './ui';
 
@@ -13,28 +13,44 @@ export const InstallHelp: React.FC = () => {
     return () => window.removeEventListener('sam:install-help', on);
   }, []);
   const ios = isIOS();
+  const mobile = ios || /Android|Mobi/i.test(navigator.userAgent);
+  const mac = !mobile && /Macintosh/.test(navigator.userAgent);
+  const safariMac = mac && /Safari/.test(navigator.userAgent) && !/Chrome|Edg/.test(navigator.userAgent);
+
+  const steps = ios
+    ? [
+        { icon: <Share className="h-5 w-5" />, text: <>Ouvre SAM dans <strong>Safari</strong> (ou Chrome), puis touche le bouton <strong>Partager</strong>.</> },
+        { icon: <SquarePlus className="h-5 w-5" />, text: <>Fais défiler et choisis <strong>Sur l’écran d’accueil</strong>.</> },
+        { icon: <Smartphone className="h-5 w-5" />, text: <>Touche <strong>Ajouter</strong>. L’icône SAM apparaît avec tes autres apps.</> },
+      ]
+    : mobile
+      ? [
+          { icon: <MoreVertical className="h-5 w-5" />, text: <>Dans <strong>Chrome</strong>, touche le menu <strong>⋮</strong> en haut à droite.</> },
+          { icon: <SquarePlus className="h-5 w-5" />, text: <>Choisis <strong>Installer l’application</strong> ou <strong>Ajouter à l’écran d’accueil</strong>.</> },
+          { icon: <Smartphone className="h-5 w-5" />, text: <>Confirme. L’icône SAM apparaît avec tes autres apps.</> },
+        ]
+      : safariMac
+        ? [
+            { icon: <Share className="h-5 w-5" />, text: <>Dans <strong>Safari</strong>, ouvre le menu <strong>Fichier</strong> (ou le bouton Partager).</> },
+            { icon: <SquarePlus className="h-5 w-5" />, text: <>Choisis <strong>Ajouter au Dock</strong>.</> },
+            { icon: <Monitor className="h-5 w-5" />, text: <>SAM s’ouvre ensuite depuis le Dock, dans sa propre fenêtre.</> },
+          ]
+        : [
+            { icon: <MonitorDown className="h-5 w-5" />, text: <>Dans <strong>Chrome</strong> ou <strong>Edge</strong>, clique sur l’icône d’installation à droite de la barre d’adresse.</> },
+            { icon: <MoreVertical className="h-5 w-5" />, text: <>Sinon : menu <strong>⋮</strong> (ou <strong>…</strong> dans Edge) → <strong>Caster, enregistrer et partager → Installer la page en tant qu’application</strong> (Chrome) ou <strong>Applications → Installer ce site en tant qu’application</strong> (Edge).</> },
+            { icon: <Monitor className="h-5 w-5" />, text: <>SAM apparaît dans le menu Démarrer et peut être épinglée à la barre des tâches. Firefox ne propose pas cette option.</> },
+          ];
 
   return (
     <Sheet
       open={open}
       onClose={() => setOpen(false)}
-      title="Ajouter SAM à ton écran d’accueil"
-      description="SAM s’ouvrira comme une vraie app, en plein écran, sans retaper le lien."
+      title={mobile ? "Ajouter SAM à ton écran d’accueil" : "Installer SAM sur ton ordinateur"}
+      description={mobile ? "SAM s’ouvrira comme une vraie app, en plein écran, sans retaper le lien." : "SAM s’ouvrira dans sa propre fenêtre, comme un logiciel, sans retaper le lien."}
       footer={<Button variant="primary" onClick={() => setOpen(false)}>J’ai compris</Button>}
     >
       <ol className="space-y-4 pb-3">
-        {(ios
-          ? [
-              { icon: <Share className="h-5 w-5" />, text: <>Ouvre SAM dans <strong>Safari</strong>, puis touche le bouton <strong>Partager</strong> en bas de l’écran.</> },
-              { icon: <SquarePlus className="h-5 w-5" />, text: <>Fais défiler et choisis <strong>Sur l’écran d’accueil</strong>.</> },
-              { icon: <Smartphone className="h-5 w-5" />, text: <>Touche <strong>Ajouter</strong>. L’icône SAM apparaît avec tes autres apps.</> },
-            ]
-          : [
-              { icon: <MoreVertical className="h-5 w-5" />, text: <>Dans <strong>Chrome</strong>, touche le menu <strong>⋮</strong> en haut à droite.</> },
-              { icon: <SquarePlus className="h-5 w-5" />, text: <>Choisis <strong>Installer l’application</strong> ou <strong>Ajouter à l’écran d’accueil</strong>.</> },
-              { icon: <Smartphone className="h-5 w-5" />, text: <>Confirme. L’icône SAM apparaît avec tes autres apps.</> },
-            ]
-        ).map((s, i) => (
+        {steps.map((s, i) => (
           <li key={i} className="flex items-start gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sheet-2 text-ink">{s.icon}</span>
             <p className="pt-1.5 text-[0.95rem] text-ink">{s.text}</p>
