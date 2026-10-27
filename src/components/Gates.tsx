@@ -57,7 +57,9 @@ export const AuthScreen: React.FC = () => {
           ? 'E-mail ou mot de passe incorrect.'
           : m.includes('Email not confirmed')
             ? 'Adresse pas encore confirmée : clique le lien reçu par e-mail.'
-            : m || 'Connexion impossible. Réessaie.',
+            : /Database error|not allowed|non autoris|Signups not allowed/i.test(m)
+              ? 'Cette adresse n’est pas autorisée. SAM est réservée à deux personnes.'
+              : m || 'Connexion impossible. Réessaie.',
       });
     } finally {
       setBusy(false);
@@ -95,7 +97,9 @@ export const AuthScreen: React.FC = () => {
             {mode === 'signup' ? 'Créer ton atelier' : 'Entrer dans l’atelier'}
           </h2>
           <p className="mt-1.5 text-ink-2">
-            {mode === 'signup' ? 'Tes données sont enregistrées dans ton espace privé.' : 'Retrouve ton projet sur ton téléphone comme sur ton ordinateur.'}
+            {mode === 'signup'
+              ? 'Réservé aux deux adresses autorisées. Tes données restent dans ton espace privé.'
+              : 'Espace privé, réservé à deux personnes. Retrouve ton projet sur ton téléphone comme sur ton ordinateur.'}
           </p>
 
           <div className="mt-7 space-y-4">
@@ -193,6 +197,29 @@ export const LockScreen: React.FC = () => {
           Déverrouiller
         </button>
       </motion.form>
+    </div>
+  );
+};
+
+/* ---------------------------------------------------------------- Accès refusé */
+export const AccessScreen: React.FC<{ reason: 'denied' | 'unconfigured' }> = ({ reason }) => {
+  const { session, signOut } = useSam();
+  return (
+    <div className="grid min-h-dvh place-items-center bg-paper px-6">
+      <div className="w-full max-w-sm text-center">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-sheet-2">
+          <Lock className="h-6 w-6 text-ink-2" />
+        </div>
+        <h2 className="text-xl font-semibold">{reason === 'denied' ? 'Accès réservé' : 'Accès pas encore configuré'}</h2>
+        <p className="mt-2 text-ink-2">
+          {reason === 'denied'
+            ? <>Le compte <strong className="text-ink">{session?.user.email}</strong> n’est pas autorisé. SAM est réservée à deux personnes.</>
+            : <>La liste des deux adresses autorisées n’existe pas encore dans Supabase. Exécute le fichier <code className="rounded bg-sheet-2 px-1">supabase/acces-deux-utilisateurs.sql</code> dans l’éditeur SQL.</>}
+        </p>
+        <button onClick={signOut} className="mt-6 h-11 w-full rounded-xl bg-ink font-medium text-paper">
+          Se déconnecter
+        </button>
+      </div>
     </div>
   );
 };

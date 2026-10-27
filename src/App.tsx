@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { SamProvider, useSam } from './context/SamContext';
 import { UiProvider } from './context/UiContext';
 import { Shell, useHashTab, type ActiveTab } from './components/Shell';
-import { AuthScreen, LockScreen, Splash } from './components/Gates';
+import { AccessScreen, AuthScreen, LockScreen, Splash } from './components/Gates';
 import { SessionSheet } from './components/SessionSheet';
 import { InstallHelp } from './components/Install';
 import { DashboardView } from './views/DashboardView';
@@ -21,13 +21,14 @@ export type Intent = { prompt?: string; stageId?: number; sessionId?: string };
 export type Nav = (tab: ActiveTab, intent?: Intent) => void;
 
 function Workspace() {
-  const { isLoading, isLocked, needsAuth } = useSam();
+  const { isLoading, isLocked, needsAuth, access } = useSam();
   const [tab, go] = useHashTab();
   const [intent, setIntent] = useState<Intent>({});
   const [sessionOpen, setSessionOpen] = useState(false);
 
   if (isLoading) return <Splash />;
   if (needsAuth) return <AuthScreen />;
+  if (access !== 'ok') return <AccessScreen reason={access} />;
 
   const nav: Nav = (t, i = {}) => {
     setIntent(i);

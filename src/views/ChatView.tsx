@@ -25,6 +25,26 @@ import { InstallBanner } from '../components/Install';
 import type { Nav } from '../App';
 
 type Concision = 'concise' | 'balanced' | 'detailed';
+
+/** Résumé compact des discussions et séances passées, envoyé à SAM pour qu'elle s'en souvienne. */
+function buildMemory(data: ReturnType<typeof useSam>['data']) {
+  const clean = (t: string) => t.replace(/[#*_>`]/g, '').replace(/\s+/g, ' ').trim();
+  const chats = (data.archivedChats || []).slice(0, 8).map((c) => {
+    const asked = c.messages.filter((m) => m.sender !== 'SAM').slice(0, 3).map((m) => clean(m.content).slice(0, 120));
+    const lastReply = [...c.messages].reverse().find((m) => m.sender === 'SAM' && !m.content.startsWith('Je n’ai pas pu répondre'));
+    return {
+      date: c.updatedAt.slice(0, 10),
+      title: c.title,
+      summary: `questions : ${asked.join(' / ')}${lastReply ? ` — dernière réponse de SAM : ${clean(lastReply.content).slice(0, 260)}` : ''}`,
+    };
+  });
+  const sessions = data.sessions.slice(0, 5).map((x) => ({
+    date: x.date,
+    results: clean(x.academicJournal.resultsAchieved || ''),
+    next: clean(x.academicJournal.nextSteps || ''),
+  }));
+  return { chats, sessions };
+}
 const CONCISION: Record<Concision, string> = { concise: 'Courtes', balanced: 'Équilibrées', detailed: 'Détaillées' };
 
 const greeting = () => {
@@ -77,6 +97,7 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
           defenseDate: data.profile.defenseDate,
           decisions: data.decisions,
           stages: data.stages,
+          memory: buildMemory(data),
         },
       });
       addChatMessage({ sender: 'SAM', content: r.reply, stageReferenceId: stageId });

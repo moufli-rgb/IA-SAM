@@ -622,3 +622,56 @@ Comment te sens-tu aujourd'hui par rapport à ton sujet et par quoi souhaites-tu
   decisions: initialDecisions,
   lastSaved: new Date().toISOString()
 };
+
+/** Projet vierge pour un nouveau compte : même parcours en 20 étapes et mêmes sections, sans les données de Donald. */
+export function starterProject(email?: string): SamProjectData {
+  const raw = (email || '').split('@')[0].replace(/[._-]+/g, ' ').trim();
+  const name = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Toi';
+  const now = new Date().toISOString();
+  return {
+    profile: {
+      ...initialProfile,
+      name,
+      topic: '',
+      subTopic: '',
+      contextLocation: '',
+      supervisor: '',
+      university: '',
+      defenseDate: '',
+      isPinLocked: false,
+      pinCode: '',
+    },
+    stages: initialStages.map((s) => ({
+      ...s,
+      completedWork: '',
+      associatedSources: [],
+      validatedDecisions: [],
+      openQuestions: [],
+      difficulties: [],
+      nextActions: [],
+      status: 'not_started',
+      updatedAt: now,
+    })),
+    chatHistory: [],
+    archivedChats: [],
+    sources: [],
+    benchmarks: [],
+    sections: initialSections.map((s) => ({
+      ...s,
+      currentStep: 1,
+      outline: '',
+      missingData: [],
+      draftContent: '',
+      usedReferences: [],
+      verificationPoints: [],
+      donaldValidationNote: '',
+      isValidatedByDonald: false,
+      versions: [],
+      updatedAt: now,
+    })),
+    sessions: [],
+    tasks: [],
+    decisions: [],
+    lastSaved: now,
+  };
+}

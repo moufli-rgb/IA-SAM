@@ -25,6 +25,15 @@ src/                 → l'application (vues, design system, synchronisation Sup
 
 Chaque utilisateur a une seule ligne dans `projects` (une colonne `data` en JSON), protégée par RLS : personne d'autre ne peut la lire.
 
+## 1 bis. Réserver SAM à deux personnes
+
+1. Ouvre `supabase/acces-deux-utilisateurs.sql` et remplace les deux adresses d'exemple par les vraies.
+2. Colle le fichier dans **SQL Editor → New query → Run**. La dernière ligne affiche les deux adresses.
+3. Chacune des deux personnes crée son compte dans SAM avec **exactement** cette adresse.
+
+Toute autre adresse est refusée à l'inscription, et l'IA refuse de répondre à un compte non listé.
+Pour changer une adresse : modifie le fichier et relance-le.
+
 ## 2. Déployer sur Vercel (5 min)
 
 1. Pousse ce dossier sur GitHub (nouveau dépôt).

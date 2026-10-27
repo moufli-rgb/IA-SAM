@@ -12,7 +12,7 @@ import type {
   ProjectTask,
   ValidatedDecision,
 } from '../types/sam';
-import { defaultProjectData } from '../data/initialData';
+import { defaultProjectData, starterProject } from '../data/initialData';
 import { supabase, isCloud } from '../lib/supabase';
 import { setStudentName, uid, download, today } from '../lib/api';
 
@@ -24,6 +24,8 @@ interface SamContextType {
   isLocked: boolean;
   session: Session | null;
   needsAuth: boolean;
+  /** 'denied' : compte non autorisé ; 'unconfigured' : la liste d'accès n'existe pas encore dans Supabase. */
+  access: 'ok' | 'denied' | 'unconfigured';
   sync: SyncState;
   signOut: () => Promise<void>;
   unlockWithPin: (pin: string) => boolean;
@@ -87,6 +89,7 @@ export const SamProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!isCloud);
   const [sync, setSync] = useState<SyncState>(isCloud ? 'idle' : 'local');
+  const [access, setAccess] = useState<'ok' | 'denied' | 'unconfigured'>('ok');
   const hydrated = useRef(false);
   const saveTimer = useRef<number | null>(null);
   const userId = session?.user.id;
@@ -113,12 +116,21 @@ export const SamProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       let project: SamProjectData | null = null;
 
       if (supabase && userId) {
+        // Accès réservé : seules les adresses de la liste « allowed_emails » peuvent entrer.
+        const { data: allowed, error: accessErr } = await supabase.rpc('is_allowed');
+        if (cancelled) return;
+        if (accessErr || allowed !== true) {
+          setAccess(accessErr ? 'unconfigured' : 'denied');
+          setIsLoading(false);
+          return;
+        }
+        setAccess('ok');
         const { data: row, error } = await supabase.from('projects').select('data').eq('user_id', userId).maybeSingle();
         if (!error && row?.data) {
           project = row.data as SamProjectData;
         } else if (!error) {
-          // Premier passage : on reprend ce qui existait sur cet appareil, sinon le projet d'exemple.
-          project = readCache(userId) || readCache() || defaultProjectData;
+          // Premier passage pour ce compte : projet vierge à son nom (jamais les données d'une autre personne).
+          project = readCache(userId) || starterProject(session?.user.email);
           await supabase.from('projects').upsert({ user_id: userId, data: project });
         } else {
           console.warn('Supabase load error', error);
@@ -176,9 +188,11 @@ export const SamProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     isLocked,
     session,
     needsAuth: isCloud && authReady && !session,
+    access,
     sync,
     signOut: async () => {
       hydrated.current = false;
+      setAccess('ok');
       await supabase?.auth.signOut();
       setData(defaultProjectData);
     },

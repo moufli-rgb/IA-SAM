@@ -44,14 +44,25 @@ class HttpError extends Error {
 }
 
 async function requireUser(req: Req) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return null; // mode local sans auth
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    // En ligne (Vercel), on refuse : sans Supabase, n'importe qui pourrait utiliser la clé Gemini.
+    if (process.env.VERCEL) throw new HttpError(503, 'Supabase n’est pas configuré sur Vercel (VITE_SUPABASE_URL et VITE_SUPABASE_ANON_KEY). SAM est fermée tant que l’accès n’est pas protégé.');
+    return null; // en local sur ton PC uniquement
+  }
   const raw = req.headers['authorization'];
   const header = Array.isArray(raw) ? raw[0] : raw;
   const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) throw new HttpError(401, 'Connecte-toi pour utiliser SAM.');
-  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data.user) throw new HttpError(401, 'Session expirée. Reconnecte-toi.');
+  // Seules les deux adresses de la liste « allowed_emails » peuvent utiliser l'IA.
+  const { data: allowed, error: accessErr } = await supabase.rpc('is_allowed');
+  if (accessErr) throw new HttpError(403, 'Accès non configuré : exécute supabase/acces-deux-utilisateurs.sql dans Supabase.');
+  if (allowed !== true) throw new HttpError(403, 'Ce compte n’est pas autorisé à utiliser SAM.');
   return data.user;
 }
 
@@ -120,6 +131,12 @@ async function chat(b: any) {
     .map((s: any) => `- Étape ${s.id} : ${s.title} [${s.status}] – ${String(s.completedWork || '').slice(0, 120)}…`)
     .join('\n');
 
+  const mem = ctx.memory || {};
+  const memory = [
+    ...(mem.chats || []).slice(0, 8).map((c: any) => `- Discussion du ${str(c.date, 20)} « ${str(c.title, 120)} » : ${str(c.summary, 400)}`),
+    ...(mem.sessions || []).slice(0, 5).map((x: any) => `- Séance du ${str(x.date, 20)} : ${str(x.results, 300)} (suite prévue : ${str(x.next, 200)})`),
+  ].join('\n');
+
   const systemInstruction = `Tu es SAM, l'assistante personnelle intelligente, complice et rigoureuse de ${name}.
 RÈGLES D'IDENTITÉ :
 - Tu es SAM. Ton utilisateur s'appelle ${name} : étudiant en architecture (Master), qui réalise son mémoire et son TPFE.
@@ -144,7 +161,10 @@ DÉCISIONS VALIDÉES (à respecter sans contradiction) :
 ${decisions || 'Aucune pour l’instant.'}
 
 PARCOURS :
-${stages || 'Phase initiale de cadrage.'}`;
+${stages || 'Phase initiale de cadrage.'}
+
+MÉMOIRE DE VOS ÉCHANGES PRÉCÉDENTS (ce que vous avez déjà fait ensemble ; appuie-toi dessus, ne le redemande pas) :
+${memory || 'Première discussion.'}`;
 
   const contents: any[] = [];
   for (const h of (b.history || []).slice(-10)) {
