@@ -57,9 +57,38 @@ async function requireUser(req: Req) {
 
 const str = (v: unknown, max = 20000) => (typeof v === 'string' ? v.slice(0, max) : '');
 
+// Modèles essayés dans l'ordre quand Google est surchargé (erreurs 503 / 429).
+const FALLBACKS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-3.6-flash,gemini-3.5-flash-lite')
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
+const MODELS = [MODEL, ...FALLBACKS.filter((m) => m !== MODEL)];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function isBusy(e: any) {
+  const msg = String(e?.message || '');
+  const code = Number(e?.status || e?.code || 0);
+  return code === 503 || code === 429 || code === 500 || /UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|503|429/i.test(msg);
+}
+
 async function generate(contents: any, cfg: Record<string, unknown>) {
-  const response = await getAi().models.generateContent({ model: MODEL, contents, config: cfg });
-  return response;
+  let lastErr: any;
+  for (const model of MODELS) {
+    // Deux essais par modèle, avec une courte pause entre les deux.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await getAi().models.generateContent({ model, contents, config: cfg });
+      } catch (e: any) {
+        lastErr = e;
+        if (!isBusy(e)) throw e;
+        await sleep(attempt === 0 ? 1200 : 2500);
+      }
+    }
+  }
+  if (isBusy(lastErr)) {
+    throw new HttpError(503, 'Les serveurs de Google sont très sollicités en ce moment. Réessaie dans une minute.');
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------- actions
@@ -280,6 +309,11 @@ export default async function handler(req: Req, res: Res) {
   } catch (e: any) {
     const code = e instanceof HttpError ? e.code : 500;
     console.error('[SAM api]', e);
-    res.status(code).json({ success: false, error: e?.message || 'Erreur serveur' });
+    let message = e?.message || 'Erreur serveur';
+    try {
+      const parsed = JSON.parse(message);
+      message = parsed?.error?.message || message;
+    } catch { /* message déjà lisible */ }
+    res.status(code).json({ success: false, error: message });
   }
 }
