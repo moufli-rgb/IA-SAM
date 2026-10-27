@@ -12,8 +12,8 @@ alter table public.allowed_emails enable row level security;
 -- ⬇️ METS ICI LES DEUX ADRESSES (en minuscules) ⬇️
 delete from public.allowed_emails;
 insert into public.allowed_emails (email) values
-  ('premiere.personne@gmail.com'),
-  ('deuxieme.personne@gmail.com');
+  ('Donald.donaldmzr@gmail.com'),
+  ('Moufli.sadikoumouflihath@gmail.com');
 
 -- Plus jamais plus de deux adresses
 create or replace function public.limit_allowed_emails()
