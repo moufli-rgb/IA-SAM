@@ -53,7 +53,8 @@ interface SamContextType {
 }
 
 function archiveOf(messages: ChatMessage[]) {
-  const first = messages.find((m) => m.sender !== 'SAM')?.content || 'Discussion';
+  const firstMsg = messages.find((m) => m.sender !== 'SAM');
+  const first = firstMsg?.content || (firstMsg?.attachments?.length ? `📎 ${firstMsg.attachments.map((x) => x.name).join(', ')}` : 'Discussion');
   return {
     id: uid('chat'),
     title: first.replace(/\s+/g, ' ').slice(0, 60),

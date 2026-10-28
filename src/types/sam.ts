@@ -38,6 +38,15 @@ export interface ChatMessage {
   timestamp: string;
   stageReferenceId?: number;
   sourcesGrounding?: { title: string; url: string }[];
+  attachments?: MessageAttachment[];
+}
+
+/** Pièce jointe gardée dans l'historique : seulement une vignette (images) et le nom, pour rester léger. */
+export interface MessageAttachment {
+  name: string;
+  kind: 'image' | 'pdf' | 'text' | 'doc';
+  size: number;
+  thumb?: string;
 }
 
 export interface ReferenceSource {

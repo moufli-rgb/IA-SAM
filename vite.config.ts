@@ -17,10 +17,14 @@ function localApi(): Plugin {
           let raw = '';
           for await (const chunk of req) raw += chunk;
           const vreq: any = { method: req.method, headers: req.headers, body: raw ? JSON.parse(raw) : {} };
+          // (les réponses en flux passent par write/end comme sur Vercel)
           const vres: any = {
             status(code: number) { res.statusCode = code; return vres; },
             setHeader(k: string, v: string) { res.setHeader(k, v); },
             json(body: unknown) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)); },
+            write(chunk: string) { res.write(chunk); },
+            end() { res.end(); },
+            flushHeaders() { res.flushHeaders(); },
           };
           await mod.default(vreq, vres);
         } catch (e: any) {

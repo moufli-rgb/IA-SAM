@@ -17,6 +17,9 @@ type Res = {
   status: (code: number) => Res;
   json: (body: unknown) => void;
   setHeader: (k: string, v: string) => void;
+  write?: (chunk: string) => void;
+  end?: () => void;
+  flushHeaders?: () => void;
 };
 
 export const config = { maxDuration: 60 };
@@ -57,13 +60,14 @@ async function requireUser(req: Req) {
     auth: { persistSession: false },
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) throw new HttpError(401, 'Session expirée. Reconnecte-toi.');
-  // Seules les deux adresses de la liste « allowed_emails » peuvent utiliser l'IA.
-  const { data: allowed, error: accessErr } = await supabase.rpc('is_allowed');
-  if (accessErr) throw new HttpError(403, 'Accès non configuré : exécute supabase/acces-deux-utilisateurs.sql dans Supabase.');
+  // Un seul aller-retour : Supabase vérifie le jeton ET la liste des deux adresses autorisées.
+  const { data: allowed, error } = await supabase.rpc('is_allowed');
+  if (error) {
+    if (/jwt|token|expired|401/i.test(`${error.message} ${(error as any).code}`)) throw new HttpError(401, 'Session expirée. Reconnecte-toi.');
+    throw new HttpError(403, 'Accès non configuré : exécute supabase/acces-deux-utilisateurs.sql dans Supabase.');
+  }
   if (allowed !== true) throw new HttpError(403, 'Ce compte n’est pas autorisé à utiliser SAM.');
-  return data.user;
+  return true;
 }
 
 const str = (v: unknown, max = 20000) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -87,6 +91,10 @@ const isTimeout = (e: any) => e?.name === 'AbortError' || e?.name === 'TimeoutEr
 // Vercel coupe la fonction à 60 s : on garde une marge pour répondre proprement.
 const BUDGET_MS = 52_000;
 
+// Réflexion courte pour les échanges du chat : réponses nettement plus rapides.
+const FAST_THINKING = { thinkingConfig: { thinkingBudget: 1024 } };
+const isThinkingError = (e: any) => /thinking/i.test(String(e?.message || ''));
+
 async function generate(contents: any, cfg: Record<string, unknown>) {
   const started = Date.now();
   let lastErr: any;
@@ -96,11 +104,16 @@ async function generate(contents: any, cfg: Record<string, unknown>) {
     // Le premier modèle a plus de temps ; les modèles de secours sont plus rapides.
     const slot = i === MODELS.length - 1 ? remaining : Math.min(remaining, i === 0 ? 30_000 : 20_000);
     try {
-      return await getAi().models.generateContent({
-        model: MODELS[i],
-        contents,
-        config: { ...cfg, abortSignal: AbortSignal.timeout(slot) },
-      });
+      try {
+        return await getAi().models.generateContent({ model: MODELS[i], contents, config: { ...cfg, abortSignal: AbortSignal.timeout(slot) } });
+      } catch (e: any) {
+        // Si un modèle refuse le réglage de réflexion, on réessaie sans.
+        if (cfg.thinkingConfig && isThinkingError(e)) {
+          const { thinkingConfig, ...rest } = cfg;
+          return await getAi().models.generateContent({ model: MODELS[i], contents, config: { ...rest, abortSignal: AbortSignal.timeout(slot) } });
+        }
+        throw e;
+      }
     } catch (e: any) {
       lastErr = e;
       if (!isBusy(e) && !isTimeout(e)) throw e;
@@ -118,7 +131,7 @@ async function generate(contents: any, cfg: Record<string, unknown>) {
 
 // ---------------------------------------------------------------- actions
 
-async function chat(b: any) {
+function buildChat(b: any) {
   const name = str(b.studentName, 60) || 'Donald';
   const ctx = b.context || {};
   const conciseness = b.conciseness;
@@ -170,11 +183,92 @@ ${memory || 'Première discussion.'}`;
   for (const h of (b.history || []).slice(-10)) {
     contents.push({ role: h.sender === 'SAM' ? 'model' : 'user', parts: [{ text: str(h.content, 6000) }] });
   }
-  contents.push({ role: 'user', parts: [{ text: str(b.message, 8000) }] });
+  contents.push({ role: 'user', parts: [...attachmentParts(b.attachments), { text: str(b.message, 8000) || 'Analyse les pièces jointes.' }] });
+  return { contents, config: { systemInstruction, temperature: 0.7, ...FAST_THINKING }, name };
+}
 
-  const r = await generate(contents, { systemInstruction, temperature: 0.7 });
+/** Pièces jointes du message : images et PDF envoyés tels quels à Gemini, textes intégrés au message. */
+const INLINE_TYPES = /^(image\/(png|jpeg|webp|heic|heif|gif)|application\/pdf)$/;
+function attachmentParts(list: any): any[] {
+  if (!Array.isArray(list)) return [];
+  const parts: any[] = [];
+  let budget = 3_800_000; // reste sous la limite de 4,5 Mo des requêtes Vercel
+  for (const a of list.slice(0, 6)) {
+    const fname = str(a?.name, 120) || 'fichier';
+    if (typeof a?.text === 'string' && a.text) {
+      parts.push({ text: `Contenu du fichier « ${fname} » :\n"""\n${a.text.slice(0, 60_000)}\n"""` });
+    } else if (typeof a?.data === 'string' && INLINE_TYPES.test(String(a?.mime)) && a.data.length <= budget) {
+      budget -= a.data.length;
+      parts.push({ text: `Pièce jointe : « ${fname} »` });
+      parts.push({ inlineData: { mimeType: a.mime, data: a.data } });
+    }
+  }
+  return parts;
+}
+
+async function chat(b: any) {
+  const { contents, config, name } = buildChat(b);
+  const r = await generate(contents, config);
   return { reply: r.text || `${name}, je n'ai pas pu formuler de réponse. Peux-tu reformuler ?` };
 }
+
+/** Version « au fil de l'eau » : le texte arrive morceau par morceau, comme dans les apps d'IA. */
+async function chatStream(b: any, res: Res) {
+  const { contents, config } = buildChat(b);
+  const started = Date.now();
+  let lastErr: any;
+  for (let i = 0; i < MODELS.length; i++) {
+    const remaining = BUDGET_MS - (Date.now() - started);
+    if (remaining < 6_000) break;
+    let sent = false;
+    let cfg: Record<string, unknown> = { ...config };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const stream = await getAi().models.generateContentStream({ model: MODELS[i], contents, config: { ...cfg, abortSignal: AbortSignal.timeout(remaining) } });
+        for await (const chunk of stream) {
+          const t = chunk.text;
+          if (!t) continue;
+          if (!sent) {
+            res.status(200);
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders?.();
+            sent = true;
+          }
+          res.write!(t);
+        }
+        if (!sent) {
+          res.status(200);
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.write!('Je n’ai pas pu formuler de réponse. Peux-tu reformuler ?');
+        }
+        res.end!();
+        return;
+      } catch (e: any) {
+        lastErr = e;
+        if (sent) {
+          // Le début de la réponse est déjà parti : on signale l'interruption à la fin du texte.
+          res.write!('\n\n[[SAM_ERROR]] La réponse a été interrompue. Réessaie.');
+          res.end!();
+          return;
+        }
+        if (attempt === 0 && cfg.thinkingConfig && isThinkingError(e)) {
+          const { thinkingConfig, ...rest } = cfg;
+          cfg = rest;
+          continue;
+        }
+        break;
+      }
+    }
+    if (!isBusy(lastErr) && !isTimeout(lastErr) && !isThinkingError(lastErr)) throw lastErr;
+    await sleep(300);
+  }
+  throw new HttpError(503, isTimeout(lastErr)
+    ? 'Gemini met trop de temps à répondre en ce moment. Réessaie dans une minute.'
+    : 'Les serveurs de Google sont très sollicités en ce moment. Réessaie dans une minute.');
+}
+
+
 
 async function research(b: any) {
   const query = str(b.query, 1000);
@@ -336,6 +430,10 @@ export default async function handler(req: Req, res: Res) {
   try {
     await requireUser(req);
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
+    if (body.action === 'chat' && body.stream && typeof res.write === 'function') {
+      await chatStream(body, res);
+      return;
+    }
     const fn = ACTIONS[body.action];
     if (!fn) throw new HttpError(400, `Action inconnue : ${body.action}`);
     const result = await fn(body);

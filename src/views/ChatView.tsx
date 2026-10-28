@@ -7,6 +7,9 @@ import {
   ChevronDown,
   Copy,
   Download,
+  FileText,
+  Paperclip,
+  X,
   Lightbulb,
   ListChecks,
   Mic,
@@ -18,7 +21,9 @@ import {
 } from 'lucide-react';
 import { useSam } from '../context/SamContext';
 import { useUi } from '../context/UiContext';
-import { callAi, daysUntil, download, today } from '../lib/api';
+import { chatStream, daysUntil, download, today } from '../lib/api';
+import { ACCEPT, MAX_TOTAL_BYTES, prepareFile, toHistory, toPayload, totalSize, type PreparedFile } from '../lib/attachments';
+import type { MessageAttachment } from '../types/sam';
 import { useDictation } from '../lib/useDictation';
 import { IconButton, Markdown, SamMark, cx } from '../components/ui';
 import { InstallBanner } from '../components/Install';
@@ -66,6 +71,9 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
   const [concision, setConcision] = useState<Concision>('balanced');
   const [menu, setMenu] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [files, setFiles] = useState<PreparedFile[]>([]);
+  const [preparing, setPreparing] = useState(false);
+  const [streamText, setStreamText] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const initialCount = useRef(data.chatHistory.length);
   const fired = useRef(false);
@@ -77,33 +85,79 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: initialCount.current === messages.length ? 'auto' : 'smooth' });
   }, [messages.length, sending]);
 
+  // Suit le texte pendant qu'il arrive, sans brusquer si l'utilisateur remonte lire.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || streamText === null) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+  }, [streamText]);
+
+  const addFiles = async (list: FileList | File[]) => {
+    const incoming = Array.from(list).slice(0, 6);
+    if (!incoming.length) return;
+    setPreparing(true);
+    const ready: PreparedFile[] = [];
+    for (const f of incoming) {
+      try {
+        ready.push(await prepareFile(f));
+      } catch (e: any) {
+        toast(e.message, 'error');
+      }
+    }
+    setPreparing(false);
+    setFiles((prev) => {
+      const next = [...prev, ...ready].slice(0, 6);
+      if (totalSize(next) > MAX_TOTAL_BYTES) {
+        toast('Trop lourd pour un seul message (3 Mo maximum). Envoie les fichiers en plusieurs fois.', 'error');
+        return prev;
+      }
+      return next;
+    });
+  };
+
   const send = async (text: string) => {
     const msg = text.trim();
-    if (!msg || sending) return;
-    const history = data.chatHistory;
-    addChatMessage({ sender: 'Donald', content: msg, stageReferenceId: stageId });
+    const attached = files;
+    if ((!msg && !attached.length) || sending || preparing) return;
+    // L'historique envoyé à SAM mentionne les pièces jointes passées (sans les renvoyer).
+    const history = data.chatHistory.map((m) =>
+      m.attachments?.length ? { ...m, content: `${m.content}\n[Pièces jointes : ${m.attachments.map((a) => a.name).join(', ')}]` } : m,
+    );
+    addChatMessage({
+      sender: 'Donald',
+      content: msg,
+      stageReferenceId: stageId,
+      ...(attached.length ? { attachments: attached.map(toHistory) } : {}),
+    });
     setInput('');
+    setFiles([]);
     setSending(true);
+    setStreamText('');
     try {
-      const r = await callAi<{ reply: string }>('chat', {
-        message: msg,
-        history,
-        stageId,
-        conciseness: concision,
-        context: {
-          topic: data.profile.topic,
-          subTopic: data.profile.subTopic,
-          contextLocation: data.profile.contextLocation,
-          defenseDate: data.profile.defenseDate,
-          decisions: data.decisions,
-          stages: data.stages,
-          memory: buildMemory(data),
+      const reply = await chatStream(
+        {
+          message: msg || 'Voici des pièces jointes : analyse-les pour mon mémoire.',
+          attachments: attached.map(toPayload),
+          history,
+          stageId,
+          conciseness: concision,
+          context: {
+            topic: data.profile.topic,
+            subTopic: data.profile.subTopic,
+            contextLocation: data.profile.contextLocation,
+            defenseDate: data.profile.defenseDate,
+            decisions: data.decisions,
+            stages: data.stages,
+            memory: buildMemory(data),
+          },
         },
-      });
-      addChatMessage({ sender: 'SAM', content: r.reply, stageReferenceId: stageId });
+        (t) => setStreamText(t),
+      );
+      addChatMessage({ sender: 'SAM', content: reply || 'Je n’ai pas pu formuler de réponse. Peux-tu reformuler ?', stageReferenceId: stageId });
     } catch (e: any) {
       addChatMessage({ sender: 'SAM', content: `Je n’ai pas pu répondre : ${e.message}` });
     } finally {
+      setStreamText(null);
       setSending(false);
     }
   };
@@ -163,6 +217,10 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
       onChange={setInput}
       onSend={() => send(input)}
       sending={sending}
+      files={files}
+      preparing={preparing}
+      onAddFiles={addFiles}
+      onRemoveFile={(id) => setFiles((f) => f.filter((x) => x.id !== id))}
       big={empty}
       stageLabel={stageId ? `Étape ${stageId}` : 'Tout le mémoire'}
       stages={data.stages.map((s) => ({ id: s.id, title: s.title }))}
@@ -324,17 +382,31 @@ export const ChatView: React.FC<{ initialPrompt?: string; initialStageId?: numbe
                     </div>
                   </>
                 ) : (
-                  <div className="max-w-[85%] rounded-[20px] bg-sheet-2 px-4 py-2.5 text-[1rem] leading-relaxed whitespace-pre-wrap">{m.content}</div>
+                  <div className="flex max-w-[85%] flex-col items-end gap-1.5">
+                    {m.attachments?.length ? <SentAttachments items={m.attachments} /> : null}
+                    {m.content && (
+                      <div className="rounded-[20px] bg-sheet-2 px-4 py-2.5 text-[1rem] leading-relaxed whitespace-pre-wrap">{m.content}</div>
+                    )}
+                  </div>
                 )}
               </motion.div>
             );
           })}
           <AnimatePresence>
             {sending && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-3">
-                <SamMark size={28} thinking />
-                <span className="text-[0.92rem] text-ink-3">SAM réfléchit…</span>
-              </motion.div>
+              streamText ? (
+                <div className="flex gap-3">
+                  <SamMark size={28} thinking className="mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <Markdown>{streamText}</Markdown>
+                  </div>
+                </div>
+              ) : (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-3">
+                  <SamMark size={28} thinking />
+                  <span className="text-[0.92rem] text-ink-3">SAM réfléchit…</span>
+                </motion.div>
+              )
             )}
           </AnimatePresence>
         </div>
@@ -363,6 +435,10 @@ const Composer: React.FC<{
   onChange: (v: string) => void;
   onSend: () => void;
   sending: boolean;
+  files: PreparedFile[];
+  preparing: boolean;
+  onAddFiles: (f: FileList | File[]) => void;
+  onRemoveFile: (id: string) => void;
   big: boolean;
   stageLabel: string;
   stages: { id: number; title: string }[];
@@ -370,8 +446,11 @@ const Composer: React.FC<{
   onStage: (v?: number) => void;
   concision: Concision;
   onConcision: (c: Concision) => void;
-}> = ({ value, onChange, onSend, sending, big, stageLabel, stages, stageId, onStage, concision, onConcision }) => {
+}> = ({ value, onChange, onSend, sending, files, preparing, onAddFiles, onRemoveFile, big, stageLabel, stages, stageId, onStage, concision, onConcision }) => {
   const ta = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const canSend = (!!value.trim() || files.length > 0) && !sending && !preparing;
   const dict = useDictation((t) => onChange(value ? `${value} ${t}` : t));
 
   useEffect(() => {
@@ -385,26 +464,97 @@ const Composer: React.FC<{
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        onSend();
+        if (canSend) onSend();
       }}
-      className="rounded-[22px] border border-line bg-sheet shadow-[0_2px_12px_-4px_rgba(0,0,0,0.08)] transition focus-within:border-ink-3"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDragging(false);
+        onAddFiles(e.dataTransfer.files);
+      }}
+      className={cx(
+        'rounded-[22px] border bg-sheet shadow-[0_2px_12px_-4px_rgba(0,0,0,0.08)] transition focus-within:border-ink-3',
+        dragging ? 'border-adire ring-4 ring-adire/15' : 'border-line',
+      )}
     >
+      {(files.length > 0 || preparing) && (
+        <div className="scrollbar-none flex gap-2 overflow-x-auto px-3 pt-3">
+          {files.map((f) => (
+            <div key={f.id} className="group relative shrink-0">
+              {f.thumb ? (
+                <img src={f.thumb} alt={f.name} className="h-16 w-16 rounded-xl border border-line object-cover" />
+              ) : (
+                <div className="flex h-16 w-44 items-center gap-2 rounded-xl border border-line bg-sheet-2 px-3">
+                  <FileText className="h-5 w-5 shrink-0 text-ink-2" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[0.82rem] font-medium text-ink">{f.name}</span>
+                    <span className="block text-[0.74rem] text-ink-3">{f.kind === 'pdf' ? 'PDF' : f.kind === 'doc' ? 'Word' : 'Texte'}</span>
+                  </span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onRemoveFile(f.id)}
+                aria-label={`Retirer ${f.name}`}
+                className="absolute -top-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-ink text-paper shadow"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {preparing && <div className="flex h-16 w-16 shrink-0 animate-pulse items-center justify-center rounded-xl bg-sheet-2 text-[0.72rem] text-ink-3">…</div>}
+        </div>
+      )}
       <textarea
         ref={ta}
         rows={big ? 2 : 1}
         value={value}
         autoFocus={big && typeof window !== 'undefined' && window.matchMedia('(pointer: fine)').matches}
         onChange={(e) => onChange(e.target.value)}
+        onPaste={(e) => {
+          const pasted = Array.from(e.clipboardData.files || []);
+          if (pasted.length) {
+            e.preventDefault();
+            onAddFiles(pasted);
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && window.matchMedia('(pointer: fine)').matches) {
             e.preventDefault();
-            onSend();
+            if (canSend) onSend();
           }
         }}
         placeholder={dict.listening ? 'Je t’écoute…' : 'Écris à SAM…'}
         className="block max-h-[220px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[1rem] leading-relaxed placeholder:text-ink-3 focus:outline-none"
       />
       <div className="flex items-center gap-1 px-2 pb-2">
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          accept={ACCEPT}
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) onAddFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => picker.current?.click()}
+          aria-label="Ajouter une image ou un fichier"
+          title="Ajouter une image ou un fichier (PDF, Word, texte)"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink-2 transition hover:bg-sheet-2"
+        >
+          <Paperclip className="h-[18px] w-[18px]" />
+        </button>
         <Chip label={stageLabel}>
           <select
             value={stageId ?? ''}
@@ -418,29 +568,31 @@ const Composer: React.FC<{
             ))}
           </select>
         </Chip>
-        <Chip label={CONCISION[concision]} className="hidden sm:inline-flex">
-          <select value={concision} onChange={(e) => onConcision(e.target.value as Concision)} className="absolute inset-0 cursor-pointer opacity-0" aria-label="Longueur des réponses">
-            {Object.entries(CONCISION).map(([k, v]) => (
-              <option key={k} value={k}>Réponses {v.toLowerCase()}</option>
-            ))}
-          </select>
-        </Chip>
+        <span className="hidden sm:block">
+          <Chip label={CONCISION[concision]}>
+            <select value={concision} onChange={(e) => onConcision(e.target.value as Concision)} className="absolute inset-0 cursor-pointer opacity-0" aria-label="Longueur des réponses">
+              {Object.entries(CONCISION).map(([k, v]) => (
+                <option key={k} value={k}>Réponses {v.toLowerCase()}</option>
+              ))}
+            </select>
+          </Chip>
+        </span>
         <span className="flex-1" />
         {dict.supported && (
           <button
             type="button"
             onClick={dict.toggle}
             aria-label={dict.listening ? 'Arrêter la dictée' : 'Dicter'}
-            className={cx('flex h-9 w-9 items-center justify-center rounded-full transition', dict.listening ? 'bg-laterite text-white' : 'text-ink-2 hover:bg-sheet-2')}
+            className={cx('flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition', dict.listening ? 'bg-laterite text-white' : 'text-ink-2 hover:bg-sheet-2')}
           >
             {dict.listening ? <Square className="h-3.5 w-3.5" fill="currentColor" /> : <Mic className="h-[18px] w-[18px]" />}
           </button>
         )}
         <button
           type="submit"
-          disabled={!value.trim() || sending}
+          disabled={!canSend}
           aria-label="Envoyer"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-paper transition active:scale-95 disabled:bg-line disabled:text-ink-3"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition active:scale-95 disabled:bg-line disabled:text-ink-3"
         >
           <ArrowUp className="h-[18px] w-[18px]" />
         </button>
@@ -450,9 +602,25 @@ const Composer: React.FC<{
 };
 
 const Chip: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({ label, children, className }) => (
-  <span className={cx('relative inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[0.82rem] text-ink-2 hover:bg-sheet-2', className)}>
-    <span className="max-w-[9rem] truncate">{label}</span>
+  <span className={cx('relative inline-flex h-8 min-w-0 items-center gap-1 rounded-full px-2.5 text-[0.82rem] text-ink-2 hover:bg-sheet-2', className)}>
+    <span className="max-w-[7.5rem] truncate sm:max-w-[9rem]">{label}</span>
     <ChevronDown className="h-3.5 w-3.5 text-ink-3" />
     {children}
   </span>
+);
+
+/* ---------------------------------------------------------------- Pièces jointes déjà envoyées */
+const SentAttachments: React.FC<{ items: MessageAttachment[] }> = ({ items }) => (
+  <div className="flex flex-wrap justify-end gap-1.5">
+    {items.map((a, i) =>
+      a.thumb ? (
+        <img key={i} src={a.thumb} alt={a.name} className="h-28 max-w-[180px] rounded-2xl border border-line object-cover" />
+      ) : (
+        <span key={i} className="inline-flex max-w-[220px] items-center gap-2 rounded-xl border border-line bg-sheet px-3 py-2 text-[0.84rem]">
+          <FileText className="h-4 w-4 shrink-0 text-ink-2" />
+          <span className="truncate">{a.name}</span>
+        </span>
+      ),
+    )}
+  </div>
 );

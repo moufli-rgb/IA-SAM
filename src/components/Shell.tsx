@@ -234,7 +234,9 @@ const Sidebar: React.FC<{
   const days = daysUntil(data.profile.defenseDate);
   const recents = data.archivedChats || [];
   const firstUser = data.chatHistory.find((m) => m.sender !== 'SAM');
-  const currentTitle = firstUser ? firstUser.content.replace(/\s+/g, ' ').slice(0, 60) : '';
+  const currentTitle = firstUser
+    ? (firstUser.content || (firstUser.attachments?.length ? `📎 ${firstUser.attachments.map((x) => x.name).join(', ')}` : 'Discussion')).replace(/\s+/g, ' ').slice(0, 60)
+    : '';
   const name = data.profile.name || 'Toi';
 
   return (
